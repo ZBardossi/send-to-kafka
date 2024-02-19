@@ -1,0 +1,78 @@
+require('dotenv').config()
+const { Kafka } = require('kafkajs')
+const fs = require('fs')
+
+const kafka = new Kafka({
+    brokers: [process.env.KAFKA_ENDPOINT],
+    ssl: true,
+    sasl: {
+        mechanism: 'plain',
+        username: process.env.KAFKA_USER,
+        password: process.env.KAFKA_PASS,
+    }
+})
+
+const producer = kafka.producer()
+
+const produceFromFile = async () => {
+    await producer.connect()
+    const readStream = fs.createReadStream(process.env.INPUT_FILE)
+
+    let linesProcessed = 0;
+    let batchNumber = 1;
+    let batchMessages = [];
+
+
+    readStream.on('data', async (chunk) => {
+        const data = chunk.toString()
+        const lines = data.split('\n')
+      for (const line of lines) {
+        const parsedLine = JSON.parse(line.trim());
+        const key = `${parsedLine.payload.sagas[0].do.pathParams.productId}:${parsedLine.payload.sagas[0].do.pathParams.sales_channel_id}`;
+        const value = line.trim();
+
+        const message = {
+            key,
+            value
+        }
+        batchMessages.push(message)
+        linesProcessed++
+        
+        if (linesProcessed === 1000) {
+            await processBatch(batchMessages, batchNumber);
+            batchMessages = []
+            linesProcessed = 0
+            batchNumber++
+        }
+
+      }
+
+    })
+
+    readStream.on('end', async () => {
+        if (batchMessages.length > 0) {
+            await processBatch(batchMessages, batchNumber)
+        }
+    console.log('All messages sent');
+    await producer.disconnect()
+    console.log('Producer disconnected');
+})
+
+    readStream.on('error', (err) => {
+        console.error('Error reading file', err)
+})
+
+}
+
+const processBatch = async (messages, batchNumber) => {
+    console.log(`Processing batch ${batchNumber} with ${messages.length}`);
+    await producer.send({
+        topic: process.env.KAFKA_TOPIC,
+        messages: messages
+    })
+}
+
+
+
+produceFromFile()
+//readFile()
